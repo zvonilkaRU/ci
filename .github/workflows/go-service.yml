@@ -1,0 +1,67 @@
+name: Go Service CI
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+        description: "Service name (users, rooms, iam, servers)"
+      go-version:
+        required: false
+        type: string
+        default: "1.26"
+        description: "Go version"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout service
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/${{ inputs.service }}
+          path: ${{ inputs.service }}
+
+      - name: Checkout api-schema
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/api-schema
+          path: api-schema
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: ${{ inputs.service }}
+          args: --timeout=5m
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout service
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/${{ inputs.service }}
+          path: ${{ inputs.service }}
+
+      - name: Checkout api-schema
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/api-schema
+          path: api-schema
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Build
+        working-directory: ${{ inputs.service }}
+        run: go build ./...
