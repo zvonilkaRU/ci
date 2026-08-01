@@ -41,7 +41,7 @@ jobs:
           GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           working-directory: ${{ inputs.service }}
