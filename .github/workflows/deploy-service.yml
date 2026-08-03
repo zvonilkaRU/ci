@@ -47,7 +47,7 @@ jobs:
       IMAGE_TAG: ${{ inputs.image-tag }}
     steps:
       - name: Set kubeconfig path
-        run: echo "KUBECONFIG=$HOME/.kube/zvonilka-vps.yaml" >> "$GITHUB_ENV"
+        run: echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
       - name: Resolve image tag
         if: inputs.mode == 'deploy'
         run: |
