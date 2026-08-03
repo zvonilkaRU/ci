@@ -1,0 +1,91 @@
+name: Deploy Service
+
+# Reusable deploy workflow for zvonilkaRU backend services.
+# Builds the service image (standalone Dockerfile; api-schema is fetched via
+# `go mod download` since it is public), pushes to GHCR, then rolls the k8s
+# Deployment forward — or rolls it back.
+#
+# Triggers are owned by the CALLER (service repo deploy.yml): manual
+# (workflow_dispatch) and/or tag push. This workflow is NEVER triggered
+# automatically on push to main.
+#
+# Runs on a self-hosted runner registered on the target VPS (label: vps).
+# The runner MUST have:
+#   - docker
+#   - kubectl
+#   - kubeconfig at ~/.kube/zvonilka-vps.yaml (same file the infra Makefile uses)
+# GHCR auth uses the caller's GITHUB_TOKEN (packages:write for its own package).
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        required: true
+        type: string
+        description: "Service name (users, rooms, iam, servers)"
+      image-tag:
+        required: false
+        type: string
+        default: ""
+        description: "Image tag to deploy; empty = short commit SHA"
+      mode:
+        required: false
+        type: string
+        default: "deploy"
+        description: "deploy | rollback"
+    secrets:
+      GH_TOKEN:
+        required: true
+
+jobs:
+  deploy:
+    name: ${{ inputs.mode == 'rollback' && 'Rollback' || 'Deploy' }} ${{ inputs.service }}
+    runs-on: [self-hosted, vps]
+    env:
+      REGISTRY: ghcr.io/zvonilkaRU
+      SERVICE: ${{ inputs.service }}
+      IMAGE_TAG: ${{ inputs.image-tag }}
+    steps:
+      - name: Set kubeconfig path
+        run: echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
+      - name: Resolve image tag
+        if: inputs.mode == 'deploy'
+        run: |
+          TAG="${IMAGE_TAG:-${GITHUB_SHA::12}}"
+          echo "IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "Deploying $SERVICE:$TAG"
+
+      - name: Checkout service
+        if: inputs.mode == 'deploy'
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/${{ env.SERVICE }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: ${{ env.SERVICE }}
+
+      - name: Build & push image
+        if: inputs.mode == 'deploy'
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          IMAGE="$REGISTRY/$SERVICE:$IMAGE_TAG"
+          docker build -f "$SERVICE/Dockerfile" -t "$IMAGE" "$SERVICE"
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Rollout deploy
+        if: inputs.mode == 'deploy'
+        run: |
+          # set image updates the container image; rollout restart forces a new
+          # ReplicaSet even when the image tag is unchanged (re-deploy on the
+          # same tag / re-run of the workflow just re-rolls, no questions asked).
+          kubectl set image "deployment/$SERVICE" "$SERVICE=$IMAGE" -n backend
+          kubectl rollout restart "deployment/$SERVICE" -n backend
+          kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
+
+      - name: Rollback
+        if: inputs.mode == 'rollback'
+        run: |
+          kubectl rollout undo "deployment/$SERVICE" -n backend
+          kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
