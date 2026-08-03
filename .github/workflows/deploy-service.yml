@@ -42,7 +42,7 @@ jobs:
     name: ${{ inputs.mode == 'rollback' && 'Rollback' || 'Deploy' }} ${{ inputs.service }}
     runs-on: [self-hosted, vps]
     env:
-      REGISTRY: ghcr.io/zvonilkaRU
+      REGISTRY: ghcr.io/zvonilkaru
       SERVICE: ${{ inputs.service }}
       IMAGE_TAG: ${{ inputs.image-tag }}
     steps:
