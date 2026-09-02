@@ -15,6 +15,12 @@ name: Deploy Service
 #   - kubectl
 #   - kubeconfig at ~/.kube/zvonilka-vps.yaml (same file the infra Makefile uses)
 # GHCR auth uses the caller's GITHUB_TOKEN (packages:write for its own package).
+#
+# GitOps (infra#40): при наличии org-секрета INFRA_DEPLOY_TOKEN (PAT с push
+# в zvonilkaRU/infra) деплой пинит тег образа в манифестах infra, коммитит
+# и применяет kubectl apply -k — git и кластер не расходятся. Без секрета
+# работает прежний путь (kubectl set image). Rollback после rollout undo
+# пинит в git фактический образ кластера.
 
 on:
   workflow_call:
@@ -45,6 +51,9 @@ jobs:
       REGISTRY: ghcr.io/zvonilkaru
       SERVICE: ${{ inputs.service }}
       IMAGE_TAG: ${{ inputs.image-tag }}
+      # Org-секрет с PAT (repo scope, push в zvonilkaRU/infra). Пуст, пока
+      # секрет не заведён — тогда работает legacy-путь (set image).
+      INFRA_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
     steps:
       - name: Set kubeconfig path
         run: echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
@@ -74,8 +83,38 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
-      - name: Rollout deploy
-        if: inputs.mode == 'deploy'
+      - name: Checkout infra (manifests)
+        if: inputs.mode == 'deploy' && env.INFRA_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/infra
+          token: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+          path: infra
+
+      # GitOps (infra#40): пиним тег в git ДО касания кластера, применяем
+      # kustomize-ом. Пуш не прошёл — кластер не тронут, деплой упал честно.
+      - name: Pin image in infra & deploy from git
+        if: inputs.mode == 'deploy' && env.INFRA_TOKEN != ''
+        run: |
+          GLOB="infra/k8s/base/backend/$SERVICE/*.yaml"
+          sed -i "s#image: $REGISTRY/$SERVICE:[^ ]*#image: $REGISTRY/$SERVICE:$IMAGE_TAG#" $GLOB
+          grep -q "$REGISTRY/$SERVICE:$IMAGE_TAG" $GLOB
+          cd infra
+          git config user.name "deploy-bot"
+          git config user.email "deploy-bot@users.noreply.github.com"
+          git add k8s
+          git commit -m "chore(deploy): $SERVICE -> $IMAGE_TAG [skip ci]"
+          git push
+          cd ..
+          kubectl apply -k infra/k8s/base/backend/
+          # rollout restart forces a new ReplicaSet even when the image tag is
+          # unchanged (re-deploy on the same tag / re-run just re-rolls).
+          kubectl rollout restart "deployment/$SERVICE" -n backend
+          kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
+
+      # Legacy-путь, пока org-секрета нет (или для сравнения поведения).
+      - name: Rollout deploy (legacy set image)
+        if: inputs.mode == 'deploy' && env.INFRA_TOKEN == ''
         run: |
           # set image updates the container image; rollout restart forces a new
           # ReplicaSet even when the image tag is unchanged (re-deploy on the
@@ -89,3 +128,28 @@ jobs:
         run: |
           kubectl rollout undo "deployment/$SERVICE" -n backend
           kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
+
+      # После undo пиним в git фактический образ кластера — иначе откат
+      # опять разводит git и live (infra#40).
+      - name: Checkout infra (rollback sync)
+        if: inputs.mode == 'rollback' && env.INFRA_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/infra
+          token: ${{ secrets.INFRA_DEPLOY_TOKEN }}
+          path: infra
+
+      - name: Pin rolled-back image in infra
+        if: inputs.mode == 'rollback' && env.INFRA_TOKEN != ''
+        run: |
+          IMAGE=$(kubectl get deployment "$SERVICE" -n backend -o jsonpath='{.spec.template.spec.containers[0].image}')
+          TAG="${IMAGE##*:}"
+          GLOB="infra/k8s/base/backend/$SERVICE/*.yaml"
+          sed -i "s#image: $REGISTRY/$SERVICE:[^ ]*#image: $REGISTRY/$SERVICE:$TAG#" $GLOB
+          grep -q "$REGISTRY/$SERVICE:$TAG" $GLOB
+          cd infra
+          git config user.name "deploy-bot"
+          git config user.email "deploy-bot@users.noreply.github.com"
+          git add k8s
+          git commit -m "chore(rollback): $SERVICE -> $TAG [skip ci]"
+          git push
