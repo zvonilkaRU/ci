@@ -16,11 +16,12 @@ name: Deploy Service
 #   - kubeconfig at ~/.kube/zvonilka-vps.yaml (same file the infra Makefile uses)
 # GHCR auth uses the caller's GITHUB_TOKEN (packages:write for its own package).
 #
-# GitOps (infra#40): при наличии org-секрета INFRA_DEPLOY_TOKEN (PAT с push
-# в zvonilkaRU/infra) деплой пинит тег образа в манифестах infra, коммитит
-# и применяет kubectl apply -k — git и кластер не расходятся. Без секрета
-# работает прежний путь (kubectl set image). Rollback после rollout undo
-# пинит в git фактический образ кластера.
+# GitOps (infra#40): при наличии секрета INFRA_DEPLOY_TOKEN (PAT с push в
+# zvonilkaRU/infra; заводится repo-level в каждом сервисном репо и
+# пробрасывается коллером) деплой пинит тег образа в манифестах infra,
+# коммитит и применяет kubectl apply -k — git и кластер не расходятся.
+# Без секрета работает прежний путь (kubectl set image). Rollback после
+# rollout undo пинит в git фактический образ кластера.
 
 on:
   workflow_call:
@@ -42,6 +43,10 @@ on:
     secrets:
       GH_TOKEN:
         required: true
+      # PAT с push в zvonilkaRU/infra (repo scope). Коллер пробрасывает
+      # свой repo/org-секрет; пусто = legacy-путь (set image).
+      INFRA_DEPLOY_TOKEN:
+        required: false
 
 jobs:
   deploy:
@@ -51,7 +56,7 @@ jobs:
       REGISTRY: ghcr.io/zvonilkaru
       SERVICE: ${{ inputs.service }}
       IMAGE_TAG: ${{ inputs.image-tag }}
-      # Org-секрет с PAT (repo scope, push в zvonilkaRU/infra). Пуст, пока
+      # PAT с push в zvonilkaRU/infra, проброшенный коллером. Пуст, пока
       # секрет не заведён — тогда работает legacy-путь (set image).
       INFRA_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
     steps:
