@@ -129,7 +129,7 @@ jobs:
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$HOME/.cache/trivy:/root/.cache/trivy" \
-            aquasec/trivy:0.74 image \
+            aquasec/trivy:0.74.0 image \
             --scanners vuln \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
