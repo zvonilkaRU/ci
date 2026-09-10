@@ -1,9 +1,17 @@
 name: Deploy Service
 
-# Reusable deploy workflow for zvonilkaRU backend services.
+# Reusable deploy workflow for zvonilkaRU services (backend + frontend).
 # Builds the service image (standalone Dockerfile; api-schema is fetched via
 # `go mod download` since it is public), pushes to GHCR, then rolls the k8s
 # Deployment forward — or rolls it back.
+#
+# Defaults match the backend layout (service module at repo root, namespace
+# backend, manifests in k8s/base/backend/<service>) — backend callers pass
+# only `service`. Non-standard services pass optional inputs:
+#   namespace  — k8s namespace (frontend: frontend)
+#   context    — build context dir inside the repo (frontend: app)
+#   infra-dir  — dir under infra/k8s/base/ with the pin-able manifests
+#   apply-dir  — kustomize dir (relative to infra/k8s/) to apply -k
 #
 # Triggers are owned by the CALLER (service repo deploy.yml): manual
 # (workflow_dispatch) and/or tag push. This workflow is NEVER triggered
@@ -29,7 +37,27 @@ on:
       service:
         required: true
         type: string
-        description: "Service name (users, rooms, iam, servers)"
+        description: "Service name (users, rooms, iam, servers, frontend); also the repo name, checkout path, deployment name and image name"
+      namespace:
+        required: false
+        type: string
+        default: "backend"
+        description: "k8s namespace of the Deployment (frontend: frontend)"
+      context:
+        required: false
+        type: string
+        default: "."
+        description: "Build context dir inside the repo checkout (frontend: app); default = repo root"
+      infra-dir:
+        required: false
+        type: string
+        default: ""
+        description: "Dir under infra/k8s/base/ holding the pin-able manifests; empty = backend/<service>"
+      apply-dir:
+        required: false
+        type: string
+        default: ""
+        description: "Kustomize dir to apply -k, relative to infra/k8s/; empty = base/backend/"
       image-tag:
         required: false
         type: string
@@ -56,6 +84,11 @@ jobs:
       REGISTRY: ghcr.io/zvonilkaru
       SERVICE: ${{ inputs.service }}
       IMAGE_TAG: ${{ inputs.image-tag }}
+      NAMESPACE: ${{ inputs.namespace }}
+      # Путь сборки внутри checkout: <repo>/<context> (context "." = корень).
+      BUILD_DIR: ${{ inputs.service }}/${{ inputs.context }}
+      INFRA_DIR: ${{ inputs.infra-dir || format('backend/{0}', inputs.service) }}
+      APPLY_DIR: ${{ inputs.apply-dir || 'base/backend/' }}
       # PAT с push в zvonilkaRU/infra, проброшенный коллером. Пуст, пока
       # секрет не заведён — тогда работает legacy-путь (set image).
       INFRA_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
@@ -82,7 +115,7 @@ jobs:
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           IMAGE="$REGISTRY/$SERVICE:$IMAGE_TAG"
-          docker build -f "$SERVICE/Dockerfile" -t "$IMAGE" "$SERVICE"
+          docker build -f "$BUILD_DIR/Dockerfile" -t "$IMAGE" "$BUILD_DIR"
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
         env:
@@ -101,21 +134,24 @@ jobs:
       - name: Pin image in infra & deploy from git
         if: inputs.mode == 'deploy' && env.INFRA_TOKEN != ''
         run: |
-          GLOB="infra/k8s/base/backend/$SERVICE/*.yaml"
-          sed -i "s#image: $REGISTRY/$SERVICE:[^ ]*#image: $REGISTRY/$SERVICE:$IMAGE_TAG#" $GLOB
-          grep -q "$REGISTRY/$SERVICE:$IMAGE_TAG" $GLOB
+          GLOB="infra/k8s/base/$INFRA_DIR"
+          sed -i "s#image: $REGISTRY/$SERVICE:[^ ]*#image: $REGISTRY/$SERVICE:$IMAGE_TAG#" $GLOB/*.yaml
+          grep -q "$REGISTRY/$SERVICE:$IMAGE_TAG" $GLOB/*.yaml
           cd infra
           git config user.name "deploy-bot"
           git config user.email "deploy-bot@users.noreply.github.com"
           git add k8s
-          git commit -m "chore(deploy): $SERVICE -> $IMAGE_TAG [skip ci]"
+          # Повторный деплой того же тега: пин уже в git, коммитить нечего —
+          # не падаем, apply + rollout restart ниже честно перераскатят.
+          git commit -m "chore(deploy): $SERVICE -> $IMAGE_TAG [skip ci]" \
+            || echo "infra already pins $SERVICE at $IMAGE_TAG"
           git push
           cd ..
-          kubectl apply -k infra/k8s/base/backend/
+          kubectl apply -k "infra/k8s/$APPLY_DIR"
           # rollout restart forces a new ReplicaSet even when the image tag is
           # unchanged (re-deploy on the same tag / re-run just re-rolls).
-          kubectl rollout restart "deployment/$SERVICE" -n backend
-          kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
+          kubectl rollout restart "deployment/$SERVICE" -n "$NAMESPACE"
+          kubectl rollout status "deployment/$SERVICE" -n "$NAMESPACE" --timeout=180s
 
       # Legacy-путь, пока org-секрета нет (или для сравнения поведения).
       - name: Rollout deploy (legacy set image)
@@ -124,15 +160,15 @@ jobs:
           # set image updates the container image; rollout restart forces a new
           # ReplicaSet even when the image tag is unchanged (re-deploy on the
           # same tag / re-run of the workflow just re-rolls, no questions asked).
-          kubectl set image "deployment/$SERVICE" "$SERVICE=$IMAGE" -n backend
-          kubectl rollout restart "deployment/$SERVICE" -n backend
-          kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
+          kubectl set image "deployment/$SERVICE" "$SERVICE=$IMAGE" -n "$NAMESPACE"
+          kubectl rollout restart "deployment/$SERVICE" -n "$NAMESPACE"
+          kubectl rollout status "deployment/$SERVICE" -n "$NAMESPACE" --timeout=180s
 
       - name: Rollback
         if: inputs.mode == 'rollback'
         run: |
-          kubectl rollout undo "deployment/$SERVICE" -n backend
-          kubectl rollout status "deployment/$SERVICE" -n backend --timeout=180s
+          kubectl rollout undo "deployment/$SERVICE" -n "$NAMESPACE"
+          kubectl rollout status "deployment/$SERVICE" -n "$NAMESPACE" --timeout=180s
 
       # После undo пиним в git фактический образ кластера — иначе откат
       # опять разводит git и live (infra#40).
@@ -147,14 +183,15 @@ jobs:
       - name: Pin rolled-back image in infra
         if: inputs.mode == 'rollback' && env.INFRA_TOKEN != ''
         run: |
-          IMAGE=$(kubectl get deployment "$SERVICE" -n backend -o jsonpath='{.spec.template.spec.containers[0].image}')
+          IMAGE=$(kubectl get deployment "$SERVICE" -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
           TAG="${IMAGE##*:}"
-          GLOB="infra/k8s/base/backend/$SERVICE/*.yaml"
-          sed -i "s#image: $REGISTRY/$SERVICE:[^ ]*#image: $REGISTRY/$SERVICE:$TAG#" $GLOB
-          grep -q "$REGISTRY/$SERVICE:$TAG" $GLOB
+          GLOB="infra/k8s/base/$INFRA_DIR"
+          sed -i "s#image: $REGISTRY/$SERVICE:[^ ]*#image: $REGISTRY/$SERVICE:$TAG#" $GLOB/*.yaml
+          grep -q "$REGISTRY/$SERVICE:$TAG" $GLOB/*.yaml
           cd infra
           git config user.name "deploy-bot"
           git config user.email "deploy-bot@users.noreply.github.com"
           git add k8s
-          git commit -m "chore(rollback): $SERVICE -> $TAG [skip ci]"
+          git commit -m "chore(rollback): $SERVICE -> $TAG [skip ci]" \
+            || echo "infra already pins $SERVICE at $TAG"
           git push
