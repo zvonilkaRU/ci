@@ -2,7 +2,8 @@ name: Deploy Service
 
 # Reusable deploy workflow for zvonilkaRU services (backend + frontend).
 # Builds the service image (standalone Dockerfile; api-schema is fetched via
-# `go mod download` since it is public), pushes to GHCR, then rolls the k8s
+# `go mod download` since it is public), scans it with trivy (ci#16: an image
+# with HIGH/CRITICAL vulns is NOT pushed), pushes to GHCR, then rolls the k8s
 # Deployment forward — or rolls it back.
 #
 # Defaults match the backend layout (service module at repo root, namespace
@@ -110,14 +111,36 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           path: ${{ env.SERVICE }}
 
-      - name: Build & push image
+      - name: Build image
+        if: inputs.mode == 'deploy'
+        run: |
+          IMAGE="$REGISTRY/$SERVICE:$IMAGE_TAG"
+          docker build -f "$BUILD_DIR/Dockerfile" -t "$IMAGE" "$BUILD_DIR"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      # ci#16: уязвимый образ не публикуется — trivy-скан ДО docker push,
+      # гейт по HIGH/CRITICAL. trivy запускается контейнером через docker.sock
+      # (на раннере ничего не ставим); БД уязвимостей (~112 МБ) кэшируется в
+      # ~/.cache/trivy раннера и авто-обновляется. --ignore-unfixed — безфиксовые
+      # CVE не блокируют деплой: пути лечения нет, был бы только вечный стопор.
+      - name: Scan image (trivy)
+        if: inputs.mode == 'deploy'
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$HOME/.cache/trivy:/root/.cache/trivy" \
+            aquasec/trivy:0.74.0 image \
+            --scanners vuln \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            --exit-code 1 \
+            "$IMAGE"
+
+      - name: Push image
         if: inputs.mode == 'deploy'
         run: |
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          IMAGE="$REGISTRY/$SERVICE:$IMAGE_TAG"
-          docker build -f "$BUILD_DIR/Dockerfile" -t "$IMAGE" "$BUILD_DIR"
           docker push "$IMAGE"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
 

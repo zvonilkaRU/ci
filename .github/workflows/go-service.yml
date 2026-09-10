@@ -76,3 +76,37 @@ jobs:
         run: go build ./...
         env:
           GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
+
+  # ci#16: govulncheck по графу вызовов — падает только на уязвимостях,
+  # реально достижимых из кода сервиса (недостижимые выводит инфо-блоком).
+  # Тулчейн резолвится свежим 1.26.x, поэтому stdlib-находки старых патчей
+  # не флагаются.
+  vuln:
+    name: Govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: zvonilkaRU/${{ inputs.service }}
+          token: ${{ secrets.GH_TOKEN }}
+          path: ${{ inputs.service }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Configure git for private modules
+        run: |
+          git config --global url."https://git:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        env:
+          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
+
+      - name: govulncheck
+        working-directory: ${{ inputs.service }}
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+        env:
+          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
