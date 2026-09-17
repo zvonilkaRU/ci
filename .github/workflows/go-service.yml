@@ -17,65 +17,54 @@ on:
         required: true
         description: "GitHub token with access to zvonilkaRU private repos"
 
+# GOPRIVATE один для всех шагов всех джоб — задаём один раз на уровне
+# workflow вместо отдельных копий в env каждого шага.
+env:
+  GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      # Общие шаги всех джоб определены здесь YAML-якорями и переиспользуются
+      # в build/vuln псевдонимами *checkout / *setup-go / *git-private-modules.
+      - &checkout
+        name: Checkout
         uses: actions/checkout@v4
         with:
           repository: zvonilkaRU/${{ inputs.service }}
           token: ${{ secrets.GH_TOKEN }}
           path: ${{ inputs.service }}
-
-      - name: Setup Go
+      - &setup-go
+        name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: ${{ inputs.go-version }}
-
-      - name: Configure git for private modules
+          # Сервис лежит в подкаталоге <service>/ — без явного пути кэш
+          # модулей не найдёт go.sum и молча отключится.
+          cache-dependency-path: ${{ inputs.service }}/go.sum
+      - &git-private-modules
+        name: Configure git for private modules
         run: |
           git config --global url."https://git:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
-        env:
-          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
-
       - name: Lint
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           working-directory: ${{ inputs.service }}
           args: --timeout=5m
-        env:
-          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
 
   build:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          repository: zvonilkaRU/${{ inputs.service }}
-          token: ${{ secrets.GH_TOKEN }}
-          path: ${{ inputs.service }}
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ inputs.go-version }}
-
-      - name: Configure git for private modules
-        run: |
-          git config --global url."https://git:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
-        env:
-          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
-
+      - *checkout
+      - *setup-go
+      - *git-private-modules
       - name: Build
         working-directory: ${{ inputs.service }}
         run: go build ./...
-        env:
-          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
 
   # ci#16: govulncheck по графу вызовов — падает только на уязвимостях,
   # реально достижимых из кода сервиса (недостижимые выводит инфо-блоком).
@@ -85,28 +74,11 @@ jobs:
     name: Govulncheck
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          repository: zvonilkaRU/${{ inputs.service }}
-          token: ${{ secrets.GH_TOKEN }}
-          path: ${{ inputs.service }}
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ inputs.go-version }}
-
-      - name: Configure git for private modules
-        run: |
-          git config --global url."https://git:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
-        env:
-          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
-
+      - *checkout
+      - *setup-go
+      - *git-private-modules
       - name: govulncheck
         working-directory: ${{ inputs.service }}
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
-        env:
-          GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
