@@ -95,8 +95,10 @@ jobs:
       # секрет не заведён — тогда работает legacy-путь (set image).
       INFRA_TOKEN: ${{ secrets.INFRA_DEPLOY_TOKEN }}
     steps:
+      # ci#26: единый kubeconfig с infra-инструментами (Makefile, migrate.sh)
+      # — на раннере может лежать и дефолтный ~/.kube/config.
       - name: Set kubeconfig path
-        run: echo "KUBECONFIG=$HOME/.kube/config" >> "$GITHUB_ENV"
+        run: echo "KUBECONFIG=$HOME/.kube/zvonilka-vps.yaml" >> "$GITHUB_ENV"
       - name: Resolve image tag
         if: inputs.mode == 'deploy'
         run: |
