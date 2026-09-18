@@ -228,11 +228,13 @@ jobs:
       - name: Scan image (trivy)
         if: inputs.mode == 'deploy'
         run: |
+          # ci#39: docker.sock монтируется стороннему образу — только digest-пин;
+          # обновление версии = осознанный коммит нового digest.
+          # (Комментарий обязан стоять ДО docker run: строка «# …» внутри
+          # последовательности «\»-переносов обрывает команду.)
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$HOME/.cache/trivy:/root/.cache/trivy" \
-            # ci#39: docker.sock монтируется стороннему образу — только digest-пин;
-            # обновление версии = осознанный коммит нового digest
             aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 image \
             --scanners vuln \
             --severity HIGH,CRITICAL \
