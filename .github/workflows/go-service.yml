@@ -23,9 +23,11 @@ env:
   GOPRIVATE: github.com/zvonilkaRU,github.com/ilovepitsa
 
 jobs:
+  # ci#41: без явного timeout-minutes зависшая джоба висит дефолтные 6 ч.
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # Общие шаги всех джоб определены здесь YAML-якорями и переиспользуются
       # в build/vuln псевдонимами *checkout / *setup-go / *git-private-modules.
@@ -58,6 +60,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - *checkout
       - *setup-go
@@ -73,6 +76,7 @@ jobs:
   vuln:
     name: Govulncheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - *checkout
       - *setup-go

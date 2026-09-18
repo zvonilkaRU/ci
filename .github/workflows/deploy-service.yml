@@ -81,6 +81,9 @@ jobs:
   deploy:
     name: ${{ inputs.mode == 'rollback' && 'Rollback' || 'Deploy' }} ${{ inputs.service }}
     runs-on: [self-hosted, vps]
+    # ci#41: единственный vps-раннер — зависшая джоба держит слот до 6 ч.
+    # build+scan+push+rollout укладываются в 30 мин с запасом.
+    timeout-minutes: 30
     env:
       REGISTRY: ghcr.io/zvonilkaru
       SERVICE: ${{ inputs.service }}
