@@ -156,6 +156,41 @@ jobs:
           token: ${{ secrets.GH_TOKEN }}
           path: ${{ env.SERVICE }}
 
+      # ci#27: накат миграций выполняет сам сервис при старте пода
+      # (embed + goose, ci#1) — в пайплайне дублировать нечего. Гейт
+      # консистентности файлов ловит класс регрессии TASKS#8 (дубликаты
+      # версий goose) ДО сборки и пуша образа: такой релис иначе падает
+      # crash-loop'ом уже после раскатки. Нет каталога migrations (iam,
+      # frontend) — шаг молча пропускается.
+      - name: Verify migrations consistent
+        if: inputs.mode == 'deploy'
+        run: |
+          MIGRATIONS_DIR="$BUILD_DIR/migrations"
+          if [ ! -d "$MIGRATIONS_DIR" ]; then
+            echo "migrations/ не найден — $SERVICE без собственной схемы БД, пропуск"
+            exit 0
+          fi
+          MIGRATIONS_DIR="$MIGRATIONS_DIR" python3 - <<'EOF'
+          import os, re, sys
+
+          mig_dir = os.environ["MIGRATIONS_DIR"]
+          ups = {}
+          for name in sorted(os.listdir(mig_dir)):
+              if name.endswith(".down.sql"):
+                  continue
+              m = re.match(r"^(\d+)_.+\.sql$", name)
+              if not m:
+                  sys.exit(f"migrations: некорректное имя файла: {name} (ожидается NNN_name.sql)")
+              version = int(m.group(1))
+              if version in ups:
+                  sys.exit(f"migrations: дубликат версии {version}: {ups[version]} и {name}")
+              ups[version] = name
+          if not ups:
+              sys.exit("migrations: каталог пуст — ожидается хотя бы одна миграция")
+          versions = sorted(ups)
+          print(f"migrations: файлов: {len(versions)}, версии {versions[0]:03d}..{versions[-1]:03d} — консистентно")
+          EOF
+
       - name: Build image
         if: inputs.mode == 'deploy'
         run: |
