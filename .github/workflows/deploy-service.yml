@@ -109,6 +109,44 @@ jobs:
           echo "IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
           echo "Deploying $SERVICE:$TAG"
 
+      # ci#28: push тега не защищён branch protection — деплой может уйти
+      # с коммита, не прошедшего CI. Гейт: у деплоящегося коммита (GITHUB_SHA
+      # коллера) все check-runs завершены и зелёные. Ошибки API и «CI ещё
+      # идёт» тоже блокируют деплой (fail closed) — перезапустить после
+      # прохождения. Только python3 stdlib — без зависимости от jq/gh на
+      # раннере. Токену коллера нужна permission checks: read (ci#29).
+      - name: Verify CI passed
+        if: inputs.mode == 'deploy'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys, urllib.error, urllib.request
+
+          svc, sha = os.environ["SERVICE"], os.environ["GITHUB_SHA"]
+          tok = os.environ["GH_TOKEN"]
+          url = f"https://api.github.com/repos/zvonilkaRU/{svc}/commits/{sha}/check-runs?per_page=100"
+          req = urllib.request.Request(url, headers={
+              "Authorization": f"Bearer {tok}",
+              "Accept": "application/vnd.github+json",
+          })
+          try:
+              with urllib.request.urlopen(req) as r:
+                  runs = json.load(r)["check_runs"]
+          except urllib.error.HTTPError as e:
+              sys.exit(f"CI gate: GitHub API {e.code} для {sha[:12]} — fail closed")
+
+          if not runs:
+              sys.exit(f"CI gate: у коммита {sha[:12]} нет прогонов CI — деплой запрещён")
+          pending = [x["name"] for x in runs if x["status"] != "completed"]
+          if pending:
+              sys.exit(f"CI gate: CI ещё идёт ({', '.join(pending)}) — перезапусти деплой после завершения")
+          bad = [f'{x["name"]}: {x["conclusion"]}' for x in runs if x["conclusion"] != "success"]
+          if bad:
+              sys.exit(f"CI gate: не все проверки зелёные — {', '.join(bad)}")
+          print(f"CI gate: {len(runs)} проверок коммита {sha[:12]} — все success")
+          EOF
+
       - name: Checkout service
         if: inputs.mode == 'deploy'
         # ci#39: пин по SHA — мутабельный тег экшена можно переписать в апстриме
