@@ -33,14 +33,15 @@ jobs:
       # в build/vuln псевдонимами *checkout / *setup-go / *git-private-modules.
       - &checkout
         name: Checkout
-        uses: actions/checkout@v4
+        # ci#39: пин по SHA, комментарий — источник версии
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: zvonilkaRU/${{ inputs.service }}
           token: ${{ secrets.GH_TOKEN }}
           path: ${{ inputs.service }}
       - &setup-go
         name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ inputs.go-version }}
           # Сервис лежит в подкаталоге <service>/ — без явного пути кэш
@@ -51,7 +52,7 @@ jobs:
         run: |
           git config --global url."https://git:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
       - name: Lint
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: v2.12.2
           working-directory: ${{ inputs.service }}
