@@ -118,7 +118,10 @@ jobs:
         if: inputs.mode == 'deploy'
         run: |
           IMAGE="$REGISTRY/$SERVICE:$IMAGE_TAG"
-          docker build -f "$BUILD_DIR/Dockerfile" -t "$IMAGE" "$BUILD_DIR"
+          # ci#36: --pull — сверяться с реестром за свежим базовым образом,
+          # а не брать протухший слой из кэша раннера (иначе патчи alpine/nginx
+          # не попадают в сборку, и trivy-гейт ci#16 блокирует деплой).
+          docker build --pull -f "$BUILD_DIR/Dockerfile" -t "$IMAGE" "$BUILD_DIR"
           echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
 
       # ci#16: уязвимый образ не публикуется — trivy-скан ДО docker push,
