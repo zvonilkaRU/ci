@@ -106,7 +106,8 @@ jobs:
 
       - name: Checkout service
         if: inputs.mode == 'deploy'
-        uses: actions/checkout@v4
+        # ci#39: пин по SHA — мутабельный тег экшена можно переписать в апстриме
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: zvonilkaRU/${{ env.SERVICE }}
           token: ${{ secrets.GH_TOKEN }}
@@ -130,7 +131,9 @@ jobs:
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$HOME/.cache/trivy:/root/.cache/trivy" \
-            aquasec/trivy:0.74.0 image \
+            # ci#39: docker.sock монтируется стороннему образу — только digest-пин;
+            # обновление версии = осознанный коммит нового digest
+            aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 image \
             --scanners vuln \
             --severity HIGH,CRITICAL \
             --ignore-unfixed \
@@ -167,7 +170,8 @@ jobs:
       # откаченный образ; в deploy-режиме пропущенные шаги ничего не меняют.
       - name: Checkout infra
         if: env.INFRA_TOKEN != '' && (inputs.mode == 'deploy' || inputs.mode == 'rollback')
-        uses: actions/checkout@v4
+        # ci#39: пин по SHA — мутабельный тег экшена можно переписать в апстриме
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: zvonilkaRU/infra
           token: ${{ secrets.INFRA_DEPLOY_TOKEN }}
