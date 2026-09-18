@@ -309,6 +309,11 @@ jobs:
             echo "infra already pins $SERVICE at $TAG"
           else
             git commit -m "chore($MODE): $SERVICE -> $TAG [skip ci]"
+            # ci#42: в окне между checkout и push в infra main мог влиться
+            # чужой коммит — ребейзим наш единственный поверх актуального
+            # main вместо падения non-fast-forward после уже собранного
+            # образа. (Второго vps-раннера нет: деплой-джобы сериализуются.)
+            git pull --rebase origin main
             git push
           fi
 
