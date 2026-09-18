@@ -63,7 +63,7 @@ on:
         required: false
         type: string
         default: ""
-        description: "Image tag to deploy; empty = short commit SHA"
+        description: "Image tag to deploy; empty = tag name (vX.Y.Z) on tag push, else short commit SHA; mutable names (main/master/latest) are rejected"
       mode:
         required: false
         type: string
@@ -105,7 +105,26 @@ jobs:
       - name: Resolve image tag
         if: inputs.mode == 'deploy'
         run: |
-          TAG="${IMAGE_TAG:-${GITHUB_SHA::12}}"
+          # ci#38: мутабельные имена (main/master/latest) запрещены — GitOps-пин
+          # обязан ссылаться на иммутабельный тег, иначе повторный деплой того же
+          # имени молча подменяет образ при неизменном git-пине.
+          case "$IMAGE_TAG" in
+            main|master|latest)
+              echo "::error::image-tag '$IMAGE_TAG' мутабелен — передай тег релиза или оставь пустым"
+              exit 1
+              ;;
+          esac
+          if [ -z "$IMAGE_TAG" ]; then
+            # Пустой input (коллеры больше не подставляют свой fallback):
+            # tag push деплоит именем тега vX.Y.Z, ручной dispatch — short SHA.
+            if [ "$GITHUB_EVENT_NAME" = "push" ] && [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              TAG="$GITHUB_REF_NAME"
+            else
+              TAG="${GITHUB_SHA::12}"
+            fi
+          else
+            TAG="$IMAGE_TAG"
+          fi
           echo "IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
           echo "Deploying $SERVICE:$TAG"
 
